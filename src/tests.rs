@@ -189,3 +189,56 @@ fn test_stale_icon_not_stripped_when_notification_expects_tab() {
     let base = state.strip_icons("Beta ⏳");
     assert!(state.notified_tab_names.values().any(|name| name == &base));
 }
+
+#[cfg(test)]
+mod radar_tests {
+    use crate::radar;
+    use crate::state::NotificationType;
+
+    #[test]
+    fn parses_radar_pending() {
+        let payload = r#"{"pane":{"type":"terminal","id":12},"status":"pending"}"#;
+        assert_eq!(radar::parse_radar_payload(payload), Some((12, NotificationType::Waiting)));
+    }
+
+    #[test]
+    fn parses_radar_error() {
+        let payload = r#"{"pane":{"type":"terminal","id":12},"status":"error"}"#;
+        assert_eq!(radar::parse_radar_payload(payload), Some((12, NotificationType::Waiting)));
+    }
+
+    #[test]
+    fn parses_radar_done() {
+        let payload = r#"{"pane":{"type":"terminal","id":12},"status":"done"}"#;
+        assert_eq!(radar::parse_radar_payload(payload), Some((12, NotificationType::Completed)));
+    }
+
+    #[test]
+    fn ignores_radar_running() {
+        let payload = r#"{"pane":{"type":"terminal","id":12},"status":"running"}"#;
+        assert_eq!(radar::parse_radar_payload(payload), None);
+    }
+
+    #[test]
+    fn ignores_radar_idle() {
+        let payload = r#"{"pane":{"type":"terminal","id":12},"status":"idle"}"#;
+        assert_eq!(radar::parse_radar_payload(payload), None);
+    }
+
+    #[test]
+    fn rejects_malformed_json() {
+        assert_eq!(radar::parse_radar_payload("not json"), None);
+    }
+
+    #[test]
+    fn handles_extra_fields() {
+        let payload = r#"{"v":1,"source":"cursor","pane":{"type":"terminal","id":7},"status":"pending","repo":"foo","branch":"main","msg":"hello","task":"fix"}"#;
+        assert_eq!(radar::parse_radar_payload(payload), Some((7, NotificationType::Waiting)));
+    }
+
+    #[test]
+    fn handles_missing_pane_defaults_to_zero() {
+        let payload = r#"{"status":"done"}"#;
+        assert_eq!(radar::parse_radar_payload(payload), Some((0, NotificationType::Completed)));
+    }
+}

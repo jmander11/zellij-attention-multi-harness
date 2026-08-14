@@ -1,4 +1,5 @@
 pub mod config;
+pub mod radar;
 pub mod state;
 
 #[cfg(test)]
@@ -320,6 +321,34 @@ impl ZellijPlugin for State {
     fn render(&mut self, _rows: usize, _cols: usize) {}
 
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
+        // Handle zj_radar.status.v1 broadcasts
+        if pipe_message.name == "zj_radar.status.v1" {
+            let raw = match &pipe_message.payload {
+                Some(p) => p,
+                None => {
+                    unblock_cli_pipe_input(&pipe_message.name);
+                    return false;
+                }
+            };
+            match radar::parse_radar_payload(raw) {
+                Some((pane_id, notification_type)) => {
+                    unblock_cli_pipe_input(&pipe_message.name);
+                    let mut notifications = HashSet::new();
+                    notifications.insert(notification_type);
+                    self.notification_state.insert(pane_id, notifications);
+                    if let Some(tab_name) = self.find_tab_name_for_pane(pane_id) {
+                        self.notified_tab_names.insert(pane_id, tab_name);
+                    }
+                    self.update_tab_names();
+                    return false;
+                }
+                None => {
+                    unblock_cli_pipe_input(&pipe_message.name);
+                    return false;
+                }
+            }
+        }
+
         #[cfg(debug_assertions)]
         eprintln!(
             "zellij-attention: pipe name={} payload={:?}\n",

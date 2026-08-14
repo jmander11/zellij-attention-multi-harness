@@ -1,19 +1,19 @@
 [package]
-name = "zellij-attention"
-version = "0.3.1"
+name = "zellij-agent-attention"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 
 [lib]
-name = "zellij_attention"
+name = "zellij_agent_attention"
 path = "src/lib.rs"
 
 [[bin]]
-name = "zellij-attention"
+name = "zellij-agent-attention"
 path = "src/main.rs"
 
 [dependencies]
-zellij-tile = "0.43.1"
+zellij-tile = "0.44.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
 
