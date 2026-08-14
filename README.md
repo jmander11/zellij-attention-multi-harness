@@ -20,9 +20,16 @@ https://github.com/user-attachments/assets/646effc0-1c24-413d-bef3-3d85591cd89b
 - **Standalone plugin** — works independently, no zjstatus or other status bar plugins needed
 - **zj-radar integration** — accepts `zj_radar.status.v1` broadcasts from Claude Code, Cursor, and Copilot
 
+## Prerequisites
+
+- **Zellij** ≥ 0.44.3
+- **zj-radar** CLI (recommended, see below) — provides self-limiting pipe sends and smart status derivation
+
 ## Installation
 
-### Pre-built WASM
+### Step 1: Install the Plugin
+
+**Pre-built WASM:**
 
 ```bash
 mkdir -p ~/.config/zellij/plugins
@@ -30,14 +37,16 @@ curl -L https://github.com/KiryuuLight/zellij-agent-attention/releases/latest/do
   -o ~/.config/zellij/plugins/zellij-agent-attention.wasm
 ```
 
-### Source Build
+**Or build from source** (requires Rust toolchain):
 
 ```bash
+cargo install --git https://github.com/KiryuuLight/zellij-agent-attention zellij-agent-attention
+# or
 cargo build --target wasm32-wasip1 --release
 cp target/wasm32-wasip1/release/zellij-agent-attention.wasm ~/.config/zellij/plugins/
 ```
 
-### Config
+### Step 2: Add to Zellij Config
 
 Add to `~/.config/zellij/config.kdl`:
 
@@ -54,98 +63,95 @@ load_plugins {
 
 The plugin loads in the background with no visible pane — it won't consume any screen space.
 
-## Quick Start
+### Step 3: Install zj-radar (Recommended)
 
-After installing, restart Zellij and test with a pipe command:
+zj-radar provides robust producer hooks with self-limiting pipe sends, smart status derivation, and edge-case handling. Install it:
 
-```bash
-# Send a waiting notification to the current pane (legacy format)
-zellij pipe --name "zellij-attention::waiting::$ZELLIJ_PANE_ID"
-
-# Send a completed notification
-zellij pipe --name "zellij-attention::completed::$ZELLIJ_PANE_ID"
-
-# Send via zj-radar format
-zellij pipe --name zj_radar.status.v1 -- '{"pane":{"id":'$ZELLIJ_PANE_ID'},"status":"pending"}'
-```
-
-Switch to the tab — the icon should appear. Focus the pane to clear it.
-
-## Producer Setup
-
-The plugin accepts `zj_radar.status.v1` broadcasts. Set up producers with [zj-radar](https://github.com/KiryuuLight/zj-radar):
+**With Cargo:**
 
 ```bash
 cargo install zj-radar
 ```
 
-### Claude Code
+**Or from releases** (no Rust toolchain needed):
+
+```bash
+curl -L https://github.com/KiryuuLight/zj-radar/releases/latest/download/zj-radar-installer.sh | sh
+```
+
+Verify installation:
+
+```bash
+which zj-radar
+```
+
+### Step 4: Set Up Your Agent
+
+#### Claude Code
 
 ```bash
 zj-radar setup claude
 ```
 
-This installs clean hooks that broadcast `zj_radar.status.v1` on agent lifecycle events.
+This installs hooks into `~/.claude/settings.json` that broadcast `zj_radar.status.v1` on agent lifecycle events (tool use, notifications, session start/stop).
 
-### Cursor CLI
+#### Cursor
 
-Create `.cursor/hooks.json`:
+Create `.cursor/hooks.json` in your project root (or `~/.cursor/hooks.json` for global):
 
 ```json
 {
   "hooks": {
-    "sessionStart": [
-      {"type": "command", "command": "zj-radar notify generic --status running --source cursor"}
-    ],
-    "stop": [
-      {"type": "command", "command": "zj-radar notify generic --status done --source cursor"}
-    ],
-    "postToolUseFailure": [
-      {"type": "command", "command": "zj-radar notify generic --status error --source cursor"}
-    ]
+    "sessionStart": [{"command": "zj-radar notify generic --status running --source cursor"}],
+    "stop": [{"command": "zj-radar notify generic --status done --source cursor"}],
+    "postToolUseFailure": [{"command": "zj-radar notify generic --status error --source cursor"}]
   }
 }
 ```
 
-### GitHub Copilot CLI
+#### GitHub Copilot CLI
 
-Create `.github/hooks/zj-radar.json`:
+Create `.github/hooks/zj-radar.json` in your repository (or `~/.copilot/hooks/zj-radar.json` for personal):
 
 ```json
 {
   "version": 1,
   "hooks": {
-    "sessionStart": [
-      {"type": "command", "command": "zj-radar notify generic --status running --source copilot"}
-    ],
-    "agentStop": [
-      {"type": "command", "command": "zj-radar notify generic --status done --source copilot"}
-    ],
-    "errorOccurred": [
-      {"type": "command", "command": "zj-radar notify generic --status error --source copilot"}
-    ],
-    "notification": [
-      {"type": "command", "command": "zj-radar notify generic --status pending --source copilot"}
-    ]
+    "sessionStart": [{"command": "zj-radar notify generic --status running --source copilot"}],
+    "agentStop": [{"command": "zj-radar notify generic --status done --source copilot"}],
+    "errorOccurred": [{"command": "zj-radar notify generic --status error --source copilot"}],
+    "notification": [{"command": "zj-radar notify generic --status pending --source copilot"}]
   }
 }
 ```
 
+### Step 5: Restart Zellij and Test
+
+Restart Zellij, then send a test notification from inside a Zellij pane:
+
+```bash
+# zj-radar format
+zellij pipe --name zj_radar.status.v1 -- '{"pane":{"id":'$ZELLIJ_PANE_ID'},"status":"pending"}'
+
+# Legacy format (also works)
+zellij pipe --name "zellij-attention::waiting::$ZELLIJ_PANE_ID"
+```
+
+Switch to the tab — the ⏳ icon should appear. Focus the pane to clear it.
+
 ## Status Mapping
 
-| zj-radar status | Tab icon |
-|---|---|
-| `pending` | ⏳ |
-| `error` | ⏳ |
-| `done` | ✅ |
-| `running` | (none) |
-| `idle` | (none) |
+| zj-radar status | Tab icon | Meaning |
+|---|---|---|
+| `pending` | ⏳ | Agent needs user input |
+| `error` | ⏳ | Agent encountered an error |
+| `done` | ✅ | Agent finished the task |
+| `running` | (none) | Agent is working — no action needed |
+| `idle` | (none) | Agent is idle — no action needed |
 
-`running` and `idle` are intentionally ignored — the agent is working and needs no user attention.
+## Legacy Claude Code Integration (No zj-radar)
 
-## Legacy Claude Code Integration
-
-For direct integration without zj-radar, add to `~/.claude/settings.json`:
+If you don't want to install zj-radar, Claude Code can send notifications directly. Add to `~/.claude/settings.json`:
 
 ```json
 {
@@ -174,11 +180,6 @@ For direct integration without zj-radar, add to `~/.claude/settings.json`:
   }
 }
 ```
-
-| Hook           | Notification | Meaning                  |
-| -------------- | ------------ | ------------------------ |
-| `Notification` | ⏳ waiting   | Claude needs user input  |
-| `Stop`         | ✅ completed | Claude finished the task |
 
 > **Note:** If migrating from zellij-attention's native Claude hooks to zj-radar, remove the above `Notification` and `Stop` sections from `~/.claude/settings.json`, then run `zj-radar setup claude`. Leaving both creates harmless but wasteful dual broadcasts.
 
@@ -222,7 +223,7 @@ Payload (JSON):
 
 ## Shell Functions
 
-For manual testing or integration with other tools:
+For manual testing or integration with other tools, add to your shell profile:
 
 ```bash
 notify-waiting() {
@@ -235,6 +236,16 @@ notify-completed() {
     zellij pipe --name "zellij-attention::completed::$ZELLIJ_PANE_ID"
 }
 ```
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Icons not appearing | Verify plugin is loaded: check Zellij log for `zellij-agent-attention: v0.4.0 loaded` |
+| Parse errors | Check `/tmp/zellij-attention.log` |
+| zj-radar not found | Verify `which zj-radar` returns a path; reinstall if needed |
+| Wrong Zellij version | Ensure `zellij --version` ≥ 0.44.3 |
+| Stale icons after rebuild | Clear Zellij cache: `find ~/.cache/zellij -path "*zellij-agent-attention*" -exec rm -f {} \;` |
 
 ## Development
 
@@ -249,15 +260,6 @@ cp target/wasm32-wasip1/release/zellij-agent-attention.wasm ~/.config/zellij/plu
 cargo build --target wasm32-wasip1
 tail -f /tmp/zellij-*/zellij-log-*/zellij.log | grep "zellij-agent-attention"
 ```
-
-## Troubleshooting
-
-- Check `/tmp/zellij-attention.log` for parse errors
-- Verify `zj-radar` CLI is on PATH: `which zj-radar`
-- Ensure Zellij ≥ 0.44.3
-- After rebuilding WASM, clear Zellij cache: `find ~/.cache/zellij -path "*zellij-agent-attention*" -exec rm -f {} \;`
-
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more common issues.
 
 ## License
 
