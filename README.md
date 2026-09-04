@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/646effc0-1c24-413d-bef3-3d85591cd89b
 - **Memory-only state** — lightweight, no disk I/O; stale icons cleaned up automatically on restart
 - **Configurable icons** — use any character or emoji as notification indicator
 - **Standalone plugin** — works independently, no zjstatus or other status bar plugins needed
-- **zj-radar integration** — accepts `zj_radar.status.v1` broadcasts from Claude Code, Cursor, and Copilot
+- **zj-radar integration** — accepts `zj_radar.status.v1` broadcasts from Claude Code, Cursor, Copilot, and opencode
 
 ## Prerequisites
 
@@ -124,6 +124,33 @@ Create `.github/hooks/zj-radar.json` in your repository (or `~/.copilot/hooks/zj
   }
 }
 ```
+
+#### opencode
+
+[opencode](https://opencode.ai) supports native JS plugins, so no zj-radar CLI is needed. Drop the bundled plugin into opencode's global (or project) plugin directory — it is loaded automatically at opencode startup:
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+cp opencode/zellij-attention.js ~/.config/opencode/plugins/
+# or: curl -L https://raw.githubusercontent.com/jmander11/zellij-attention-multi-harness/main/opencode/zellij-attention.js \
+#     -o ~/.config/opencode/plugins/zellij-attention.js
+```
+
+What it broadcasts (verified end-to-end):
+
+| opencode event | zj-radar status | Tab icon |
+|---|---|---|
+| `session.idle` — turn finished (initial idle on startup is suppressed) | `done` | ✅ |
+| `session.error` | `error` | ⏳ |
+| `permission.asked` / `permission.updated` — still unanswered after a 300 ms debounce | `pending` | ⏳ |
+
+Notes:
+
+- No-op outside zellij (requires `ZELLIJ_PANE_ID`, which zellij sets automatically in pane environments)
+- Subagent (e.g. explore) sessions are filtered out, so icons reflect the main session only
+- Reads `$ZELLIJ_PANE_ID` at event time, so tab kill/recreate renumbering is handled
+- Activity log: `/tmp/opencode-zellij-attention.log`
+- Takes effect on the next opencode start (plugins are not hot-reloaded)
 
 ### Step 5: Restart Zellij and Test
 
