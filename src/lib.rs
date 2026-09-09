@@ -29,42 +29,44 @@ pub struct State {
 }
 
 impl State {
-    fn determine_focused_pane(&self) -> Option<u32> {
-        let active_tab = self.tabs.iter().find(|t| t.active)?;
-        let panes = self.panes.panes.get(&active_tab.position)?;
-        let focused = panes.iter().find(|p| {
-            !p.is_plugin
-                && p.is_focused
-                && (p.is_floating == active_tab.are_floating_panes_visible)
-        })?;
-        Some(focused.id)
-    }
-
-    /// Checks if focused pane has notifications and clears them.
-    /// Only clears if the active tab's name shows our notification icon,
-    /// preventing false clears during tab reorders when pane/tab data is out of sync.
-    /// Returns true if any notification was cleared.
+    /// Clears notifications for the panes in the active tab and returns whether any
+    /// were cleared.
+    ///
+    /// Only clears when the active tab's name shows one of our icons, preventing false
+    /// clears during tab reorders when tab/pane data is momentarily out of sync.
+    ///
+    /// We key off the ACTIVE TAB rather than the focused pane. On a tab switch the
+    /// TabUpdate (fresh tab data) and the PaneUpdate (fresh is_focused flag) arrive as
+    /// separate events that never line up in a single handler, so a focused-pane lookup
+    /// sees stale focus and the icon gets stuck in the tab you are sitting in. The
+    /// active tab's pane list is stable and the user is by definition looking at the
+    /// active tab, so clearing its visible panes is both correct and robust.
     pub(crate) fn check_and_clear_focus(&mut self) -> bool {
-        if self.config.enabled {
-            let active_tab = self.tabs.iter().find(|t| t.active);
-            if let Some(active_tab) = active_tab {
-                if !self.tab_name_has_icon(&active_tab.name) {
-                    return false;
-                }
-            }
+        let active_tab = match self.tabs.iter().find(|t| t.active) {
+            Some(t) => t,
+            None => return false,
+        };
+        if self.config.enabled && !self.tab_name_has_icon(&active_tab.name) {
+            return false;
         }
-        if let Some(focused_pane_id) = self.determine_focused_pane() {
-            if self.notification_state.remove(&focused_pane_id).is_some() {
-                self.notified_tab_names.remove(&focused_pane_id);
+        let panes = match self.panes.panes.get(&active_tab.position) {
+            Some(p) => p,
+            None => return false,
+        };
+        let floating_visible = active_tab.are_floating_panes_visible;
+        let mut cleared = false;
+        for pane in panes.iter().filter(|p| !p.is_plugin && p.is_floating == floating_visible) {
+            if self.notification_state.remove(&pane.id).is_some() {
+                self.notified_tab_names.remove(&pane.id);
                 #[cfg(debug_assertions)]
                 eprintln!(
-                    "zellij-attention: Cleared notifications for focused pane {}",
-                    focused_pane_id
+                    "zellij-attention: Cleared notification for pane {} (active tab)\n",
+                    pane.id
                 );
-                return true;
+                cleared = true;
             }
         }
-        false
+        cleared
     }
 
     /// Removes notification entries for pane IDs that no longer exist.
@@ -202,7 +204,7 @@ impl State {
                     let base_name = self.strip_icons(&tab.name);
                     #[cfg(debug_assertions)]
                     eprintln!(
-                        "zellij-attention: Stripping stale icon from tab pos={} '{}' -> '{}'",
+                        "zellij-attention: Stripping stale icon from tab pos={} '{}' -> '{}'\n",
                         tab.position, tab.name, base_name
                     );
                     self.pending_renames.insert(tab.position);
@@ -230,7 +232,7 @@ impl State {
                 if tab.name != new_name {
                     #[cfg(debug_assertions)]
                     eprintln!(
-                        "zellij-attention: RENAME tab pos={} '{}' -> '{}'",
+                        "zellij-attention: RENAME tab pos={} '{}' -> '{}'\n",
                         tab.position, tab.name, new_name
                     );
                     self.pending_renames.insert(tab.position);
@@ -242,6 +244,18 @@ impl State {
                 // We issued a rename for this position; wait for Zellij to catch up
                 if !self.tab_name_has_icon(&tab.name) {
                     self.pending_renames.remove(&tab.position);
+                } else if self.get_tab_notification_state(tab.position).is_none()
+                    && !self
+                        .notified_tab_names
+                        .values()
+                        .any(|name| name == &base_name)
+                {
+                    // The rename added an icon, but the notification was since cleared
+                    // (e.g. clear-on-focus) before Zellij settled the rename. Without this,
+                    // pending_renames stays set forever (it's only removed when the tab has
+                    // no icon) and the icon never gets stripped. Strip it now.
+                    self.pending_renames.insert(tab.position);
+                    rename_tab((tab.position + 1) as u32, &base_name);
                 }
             } else if self.tab_name_has_icon(&tab.name) {
                 // Check if any active notification expects a tab with this name.
