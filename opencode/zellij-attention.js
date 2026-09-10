@@ -223,30 +223,34 @@ export const ZellijAttention = async ({ client } = {}) => {
           await setIcon(ICON_DONE, "idle");
           break;
         }
+        // ⏳ (action needed) is set regardless of focus so it is visible even when you are
+        // already in the tab; the poll clears it on focus, and the matching "replied"/next
+        // turn clears it when the action is done. (✅ stays focus-aware — see session.idle.)
         case "session.error": {
           const sessionID = event.properties?.sessionID;
           if (await isSubSession(sessionID)) break;
-          const active = await activeTabId();
-          if (myTabId != null && active === myTabId) break;
           await setIcon(ICON_WAIT, "error");
+          break;
+        }
+        case "question.asked": {
+          await setIcon(ICON_WAIT, "question");
+          break;
+        }
+        case "question.replied": {
+          if (iconSource === "question") await clearIcon("question-replied");
           break;
         }
         case "permission.asked":
         case "permission.updated": {
-          const id = event.properties?.id;
-          if (!id) break;
+          // Auto-allowed permissions are created+replied within ms; a real prompt stays open.
+          // Debounce so only a still-pending prompt sets the icon.
+          const id = event.properties?.id ?? event.properties?.permissionID ?? "perm";
           if (permissionTimers.has(id)) clearTimeout(permissionTimers.get(id));
-          // Debounce: auto-allowed permissions are created+replied within ms; a real prompt
-          // stays open, so only set the icon once it is still pending.
           permissionTimers.set(
             id,
             setTimeout(() => {
               permissionTimers.delete(id);
-              void (async () => {
-                const active = await activeTabId();
-                if (myTabId != null && active === myTabId) return;
-                await setIcon(ICON_WAIT, "permission");
-              })();
+              void setIcon(ICON_WAIT, "permission");
             }, PERMISSION_DEBOUNCE_MS),
           );
           break;
