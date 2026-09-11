@@ -120,9 +120,24 @@ export const ZellijAttention = async ({ client } = {}) => {
     }
   };
 
-  // Our tab's stable id, captured at load. Opencode is started inside a tab, so at
-  // plugin-load that tab is the active one. Null if it can't be determined (no-op after).
-  const myTabId = (await activeTabId()) ?? null;
+  // Find the tab containing this opencode pane. Do not use current-tab-info here:
+  // an opencode instance can start/resume while another tab is active.
+  async function tabIdForPane() {
+    const id = paneId();
+    if (id == null) return null;
+    const out = await runZellij(["list-panes", "-a"]);
+    if (!out) return null;
+    for (const line of out.split("\n")) {
+      // TAB_ID TAB_POS TAB_NAME ... terminal_PANE_ID ...
+      const m = line.match(/^\s*(\d+)\s+\d+\s+.*\s+terminal_(\d+)\s+/);
+      if (m && Number(m[2]) === id) return Number(m[1]);
+    }
+    return null;
+  }
+
+  // Stable id of the tab containing this opencode pane. Null if it can't be
+  // determined (no-op after).
+  const myTabId = await tabIdForPane();
   log(`plugin loaded (pane=${paneId()} tab=${myTabId ?? "none"})`);
 
   let myIcon = null; // null | ICON_DONE | ICON_WAIT

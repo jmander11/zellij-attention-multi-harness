@@ -127,7 +127,7 @@ Create `.github/hooks/zj-radar.json` in your repository (or `~/.copilot/hooks/zj
 
 #### opencode
 
-[opencode](https://opencode.ai) supports native JS plugins, so no zj-radar CLI is needed. Drop the bundled plugin into opencode's global (or project) plugin directory — it is loaded automatically at opencode startup:
+[opencode](https://opencode.ai) supports native JS plugins, so no zj-radar CLI **and no WASM plugin** are needed — instead of broadcasting a pipe message, the plugin renames its own Zellij tab by id and clears on focus. Drop the bundled plugin into opencode's global (or project) plugin directory — it is loaded automatically at opencode startup:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
@@ -136,19 +136,24 @@ cp opencode/zellij-attention.js ~/.config/opencode/plugins/
 #     -o ~/.config/opencode/plugins/zellij-attention.js
 ```
 
-What it broadcasts (verified end-to-end):
+What it does (verified end-to-end):
 
-| opencode event | zj-radar status | Tab icon |
-|---|---|---|
-| `session.idle` — turn finished (initial idle on startup is suppressed) | `done` | ✅ |
-| `session.error` | `error` | ⏳ |
-| `permission.asked` / `permission.updated` — still unanswered after a 300 ms debounce | `pending` | ⏳ |
+- On load it captures its own tab id, so it renames exactly the tab the opencode pane lives in.
+- The icon is cleared automatically by the tab-focus poll (every 1.5 s) — switch to that tab and the icon disappears — or by the matching event when the action is done.
+
+| opencode event | Tab icon |
+|---|---|
+| `session.idle` — turn finished (initial idle on startup is suppressed, suppressed on the active tab) | ✅ |
+| `session.error` | ⏳ |
+| `question.asked` — a `question`-tool prompt is waiting for an answer | ⏳ |
+| `question.replied` | clears ⏳ |
+| `permission.asked` / `permission.updated` — still unanswered after a 300 ms debounce | ⏳ |
+| `permission.replied` | clears ⏳ |
 
 Notes:
 
 - No-op outside zellij (requires `ZELLIJ_PANE_ID`, which zellij sets automatically in pane environments)
 - Subagent (e.g. explore) sessions are filtered out, so icons reflect the main session only
-- Reads `$ZELLIJ_PANE_ID` at event time, so tab kill/recreate renumbering is handled
 - Activity log: `/tmp/opencode-zellij-attention.log`
 - Takes effect on the next opencode start (plugins are not hot-reloaded)
 
