@@ -88,6 +88,13 @@ async function activeTabId() {
   return m ? Number(m[1]) : null;
 }
 
+// Canonical key for a permission event. `permission.asked`/`updated` and
+// `permission.replied` must resolve the SAME key, or a pending prompt's debounce
+// timer is never cancelled and a stale ⏳ fires after the user already replied.
+function permKey(props) {
+  return props?.id ?? props?.permissionID ?? "perm";
+}
+
 // Strip any attention-icon suffixes (in any order/count) from a tab name, returning the base.
 function stripIcon(name) {
   let r = name;
@@ -124,23 +131,35 @@ export const ZellijAttention = async ({ client } = {}) => {
 
   // Find the tab containing this opencode pane. Do not use current-tab-info here:
   // an opencode instance can start/resume while another tab is active.
+  // Uses the JSON form so a pane's title/command/cwd (which may contain "terminal_N")
+  // can't be mistaken for the pane id.
   async function tabIdForPane() {
     const id = paneId();
     if (id == null) return null;
-    const out = await runZellij(["list-panes", "-a"]);
+    const out = await runZellij(["list-panes", "-a", "-j"]);
     if (!out) return null;
-    for (const line of out.split("\n")) {
-      // TAB_ID TAB_POS TAB_NAME ... terminal_PANE_ID ...
-      const m = line.match(/^\s*(\d+)\s+\d+\s+.*\s+terminal_(\d+)\s+/);
-      if (m && Number(m[2]) === id) return Number(m[1]);
+    let panes;
+    try {
+      panes = JSON.parse(out);
+    } catch {
+      return null;
     }
-    return null;
+    if (!Array.isArray(panes)) return null;
+    const pane = panes.find((p) => !p.is_plugin && p.id === id);
+    return pane ? pane.tab_id : null;
   }
 
   // Stable id of the tab containing this opencode pane. Null if it can't be
-  // determined (no-op after).
-  const myTabId = await tabIdForPane();
+  // determined yet; retried lazily via ensureTabId() (e.g. if the CLI wasn't ready
+  // at load time, the plugin would otherwise no-op for the whole session).
+  let myTabId = await tabIdForPane();
   log(`plugin loaded (pane=${paneId()} tab=${myTabId ?? "none"})`);
+
+  // Resolve myTabId if the initial lookup failed (transient CLI timeout at load).
+  async function ensureTabId() {
+    if (myTabId == null) myTabId = await tabIdForPane();
+    return myTabId;
+  }
 
   let myIcon = null; // null | ICON_DONE | ICON_WAIT
   let iconSource = null; // "idle" | "error" | "permission"
@@ -189,7 +208,7 @@ export const ZellijAttention = async ({ client } = {}) => {
   }
 
   async function setIcon(icon, source) {
-    if (myTabId == null) return;
+    if ((await ensureTabId()) == null) return;
     const name = await myTabName();
     if (name == null) return;
     const base = stripIcon(name);
@@ -206,7 +225,7 @@ export const ZellijAttention = async ({ client } = {}) => {
     myIcon = null;
     iconSource = null;
     stopPoll();
-    if (had == null || myTabId == null) return;
+    if (had == null || (await ensureTabId()) == null) return;
     const name = await myTabName();
     if (name == null) return;
     const base = stripIcon(name);
@@ -216,14 +235,28 @@ export const ZellijAttention = async ({ client } = {}) => {
     }
   }
 
-  // Strip any icon left on our tab from the previous (WASM) mechanism / stale state.
-  void clearIcon("startup-cleanup");
+  // Strip any icon left on our tab from a previous run / the old WASM mechanism.
+  // (clearIcon() is a no-op here because myIcon is null, so do it explicitly.)
+  async function startupCleanup() {
+    if ((await ensureTabId()) == null) return;
+    const name = await myTabName();
+    if (name == null) return;
+    const base = stripIcon(name);
+    if (base !== name) {
+      await renameTab(base);
+      log(`startup-cleanup tab=${myTabId} '${name}' -> '${base}'`);
+    }
+  }
+  void startupCleanup();
 
   const firstIdleSeen = new Set();
   const permissionTimers = new Map();
+  // Sessions whose last turn ended in an error; their next idle shows ⏳, not ✅.
+  const erroredSessions = new Set();
 
   return {
     event: async ({ event }) => {
+      await ensureTabId();
       switch (event?.type) {
         case "session.idle": {
           if (!NOTIFY_ON_IDLE) break;
@@ -237,7 +270,9 @@ export const ZellijAttention = async ({ client } = {}) => {
           // Focus-aware: skip if the user is already in our tab (they can see it's done).
           const active = await activeTabId();
           if (myTabId != null && active === myTabId) break;
-          await setIcon(ICON_DONE, "idle");
+          // A turn that ended in error should show ⏳, not ✅.
+          const wasError = erroredSessions.delete(sessionID);
+          await setIcon(wasError ? ICON_WAIT : ICON_DONE, wasError ? "error" : "idle");
           break;
         }
         // ⏳ (action needed) is set regardless of focus so it is visible even when you are
@@ -246,6 +281,7 @@ export const ZellijAttention = async ({ client } = {}) => {
         case "session.error": {
           const sessionID = event.properties?.sessionID;
           if (await isSubSession(sessionID)) break;
+          if (sessionID) erroredSessions.add(sessionID);
           await setIcon(ICON_WAIT, "error");
           break;
         }
@@ -261,7 +297,7 @@ export const ZellijAttention = async ({ client } = {}) => {
         case "permission.updated": {
           // Auto-allowed permissions are created+replied within ms; a real prompt stays open.
           // Debounce so only a still-pending prompt sets the icon.
-          const id = event.properties?.id ?? event.properties?.permissionID ?? "perm";
+          const id = permKey(event.properties);
           if (permissionTimers.has(id)) clearTimeout(permissionTimers.get(id));
           permissionTimers.set(
             id,
@@ -273,8 +309,8 @@ export const ZellijAttention = async ({ client } = {}) => {
           break;
         }
         case "permission.replied": {
-          const id = event.properties?.permissionID;
-          const timer = id ? permissionTimers.get(id) : undefined;
+          const id = permKey(event.properties);
+          const timer = permissionTimers.get(id);
           if (timer) {
             clearTimeout(timer);
             permissionTimers.delete(id);
