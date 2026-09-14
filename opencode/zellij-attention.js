@@ -37,7 +37,8 @@ function paneId() {
   const raw = process.env.ZELLIJ_PANE_ID;
   if (!raw) return null;
   const id = Number(raw);
-  return Number.isInteger(id) && id > 0 ? id : null;
+  // Zellij pane ids are 0-indexed, so 0 is a valid pane (the first tab).
+  return Number.isInteger(id) && id >= 0 ? id : null;
 }
 
 // Run `zellij action <args...>`; resolve with stdout (string) or null on error/timeout.
