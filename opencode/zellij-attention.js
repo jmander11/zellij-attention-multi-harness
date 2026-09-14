@@ -145,7 +145,7 @@ export const ZellijAttention = async ({ client } = {}) => {
       return null;
     }
     if (!Array.isArray(panes)) return null;
-    const pane = panes.find((p) => !p.is_plugin && p.id === id);
+    const pane = panes.find((p) => p && !p.is_plugin && p.id === id);
     return pane ? pane.tab_id : null;
   }
 
@@ -156,9 +156,18 @@ export const ZellijAttention = async ({ client } = {}) => {
   log(`plugin loaded (pane=${paneId()} tab=${myTabId ?? "none"})`);
 
   // Resolve myTabId if the initial lookup failed (transient CLI timeout at load).
+  // Dedup in-flight lookups so concurrent callers share one list-panes call.
+  let tabIdInFlight = null;
   async function ensureTabId() {
-    if (myTabId == null) myTabId = await tabIdForPane();
-    return myTabId;
+    if (myTabId != null) return myTabId;
+    if (!tabIdInFlight) {
+      tabIdInFlight = tabIdForPane().then((t) => {
+        myTabId = t;
+        tabIdInFlight = null;
+        return t;
+      });
+    }
+    return tabIdInFlight;
   }
 
   let myIcon = null; // null | ICON_DONE | ICON_WAIT
@@ -247,7 +256,9 @@ export const ZellijAttention = async ({ client } = {}) => {
       log(`startup-cleanup tab=${myTabId} '${name}' -> '${base}'`);
     }
   }
-  void startupCleanup();
+  // Await (not fire-and-forget) so a just-set icon from an early event can't be
+  // stripped by the cleanup; the handler is only registered once cleanup is done.
+  await startupCleanup();
 
   const firstIdleSeen = new Set();
   const permissionTimers = new Map();
@@ -281,7 +292,7 @@ export const ZellijAttention = async ({ client } = {}) => {
         case "session.error": {
           const sessionID = event.properties?.sessionID;
           if (await isSubSession(sessionID)) break;
-          if (sessionID) erroredSessions.add(sessionID);
+          if (sessionID != null) erroredSessions.add(sessionID);
           await setIcon(ICON_WAIT, "error");
           break;
         }
