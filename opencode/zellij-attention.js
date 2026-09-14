@@ -106,8 +106,9 @@ function stripIcon(name) {
 }
 
 export const ZellijAttention = async ({ client } = {}) => {
-  // Outside zellij there is nothing to do.
-  if (!paneId()) {
+  // Outside zellij there is nothing to do. (paneId() is 0 for the first tab, so
+  // compare against null, not truthiness — `!0` is true and would wrongly bail out.)
+  if (paneId() == null) {
     return { event: async () => {} };
   }
 
