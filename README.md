@@ -22,12 +22,33 @@ https://github.com/user-attachments/assets/646effc0-1c24-413d-bef3-3d85591cd89b
 
 ## Documentation
 
-- **Local setup** (opencode in a zellij pane on the same host as the zellij server): the
-  [Installation](#installation) steps below.
+- **Local setup** (opencode in a zellij pane on the same host as the zellij server):
+  the [Quick start](#quick-start-opencode-same-host) below — two steps, no WASM plugin,
+  no zj-radar, no ssh.
 - **Remote setup** (opencode on another machine over `ssh`, zellij server local):
   [SSH-SETUP.md](SSH-SETUP.md) — socket forwarding, `ZELLIJ_PANE_ID`/`ZELLIJ_SOCKET_DIR`,
   and the `zssh`/`zssh2` shell functions.
+- **WASM / pipe setup** (Claude Code, Cursor, Copilot via `zj_radar.status.v1`): the
+  full [Installation](#installation) steps below.
 - **Troubleshooting**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+## Quick start (opencode, same host)
+
+If opencode runs in a zellij pane on the **same machine** as the zellij server, this is
+the whole setup — no WASM plugin, no zj-radar, no config.kdl changes:
+
+```bash
+# 1. Install the opencode plugin (global; or use .opencode/plugins/ for a single project)
+mkdir -p ~/.config/opencode/plugins
+cp opencode/zellij-attention.js ~/.config/opencode/plugins/
+
+# 2. Restart opencode (plugins load at startup, not hot)
+```
+
+That's it. The plugin finds its own tab, appends ⏳/✅ to the tab name, and clears the
+icon when you focus the tab. Verify with `tail -f /tmp/opencode-zellij-attention.log`
+(you should see a `plugin loaded (pane=… tab=… zellij=…)` line on the next opencode
+start). See the [opencode](#opencode) section for the event→icon table and notes.
 
 ## Prerequisites
 
