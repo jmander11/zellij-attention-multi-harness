@@ -15,7 +15,8 @@
 // otherwise it will strip these icons as "stale".
 
 import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
+import * as path from "node:path";
 
 const LOG_FILE = "/tmp/opencode-zellij-attention.log";
 const ICON_DONE = "✅";
@@ -26,6 +27,23 @@ const ZELLIJ_TIMEOUT_MS = 2500;
 // Show ✅ when a turn completes (session goes idle). The ✅ is suppressed in the tab you're
 // already in (see session.idle) and cleared as soon as you switch to the tab (clear-on-focus).
 const NOTIFY_ON_IDLE = true;
+
+// The zellij CLI may not be on PATH (e.g. opencode running over ssh, where the
+// remote shell's PATH lacks the dir zellij was installed into). Resolve a known
+// location before falling back to a PATH lookup.
+function resolveZellijBin() {
+  const home = process.env.HOME ?? "";
+  const candidates = home
+    ? [path.join(home, ".local/bin/zellij"), "/usr/local/bin/zellij"]
+    : ["/usr/local/bin/zellij"];
+  for (const c of candidates) {
+    try {
+      if (existsSync(c)) return c;
+    } catch {}
+  }
+  return "zellij";
+}
+const ZELLIJ_BIN = resolveZellijBin();
 
 function log(line) {
   try {
@@ -53,7 +71,7 @@ function runZellij(args, timeoutMs = ZELLIJ_TIMEOUT_MS) {
     };
     let child;
     try {
-      child = spawn("zellij", ["action", ...args], {
+      child = spawn(ZELLIJ_BIN, ["action", ...args], {
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch {
@@ -69,8 +87,9 @@ function runZellij(args, timeoutMs = ZELLIJ_TIMEOUT_MS) {
     let out = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", () => {});
-    child.on("error", () => {
+    child.on("error", (err) => {
       clearTimeout(timer);
+      log(`zellij spawn failed (${ZELLIJ_BIN}): ${err?.message ?? err}`);
       done(null);
     });
     child.on("close", (code) => {
@@ -116,6 +135,7 @@ export const ZellijAttention = async ({ client } = {}) => {
   // Outside zellij there is nothing to do. (paneId() is 0 for the first tab, so
   // compare against null, not truthiness — `!0` is true and would wrongly bail out.)
   if (paneId() == null) {
+    log("plugin no-op: ZELLIJ_PANE_ID not set (outside zellij, or env not forwarded over ssh)");
     return { event: async () => {} };
   }
 
@@ -153,7 +173,7 @@ export const ZellijAttention = async ({ client } = {}) => {
   // determined yet; retried lazily via ensureTabId() (e.g. if the CLI wasn't ready
   // at load time, the plugin would otherwise no-op for the whole session).
   let myTabId = await tabIdForPane();
-  log(`plugin loaded (pane=${paneId()} tab=${myTabId ?? "none"})`);
+  log(`plugin loaded (pane=${paneId()} tab=${myTabId ?? "none"} zellij=${ZELLIJ_BIN})`);
 
   // Resolve myTabId if the initial lookup failed (transient CLI timeout at load).
   // Dedup in-flight lookups so concurrent callers share one list-panes call.
@@ -260,24 +280,33 @@ export const ZellijAttention = async ({ client } = {}) => {
   // stripped by the cleanup; the handler is only registered once cleanup is done.
   await startupCleanup();
 
-  const firstIdleSeen = new Set();
   const permissionTimers = new Map();
   // Sessions whose last turn ended in an error; their next idle shows ⏳, not ✅.
   const erroredSessions = new Set();
+  // Sessions that went busy (started a turn) since load. opencode emits session.idle
+  // only on real turn completion (the runner is created lazily on first prompt), so a
+  // resumed session emits NO idle at load — its first turn completion must not be
+  // swallowed. Only an idle that follows a busy→idle transition earns a ✅; a startup
+  // idle with no prior busy (if one ever fires) is still suppressed.
+  const busySessions = new Set();
 
   return {
     event: async ({ event }) => {
       await ensureTabId();
       switch (event?.type) {
+        case "session.status": {
+          const sessionID = event.properties?.sessionID;
+          if (sessionID != null && event.properties?.status?.type === "busy") {
+            busySessions.add(sessionID);
+          }
+          break;
+        }
         case "session.idle": {
           if (!NOTIFY_ON_IDLE) break;
           const sessionID = event.properties?.sessionID;
           if (await isSubSession(sessionID)) break;
-          // Suppress the initial idle of a fresh/resumed session (startup, not a finished turn).
-          if (!firstIdleSeen.has(sessionID)) {
-            firstIdleSeen.add(sessionID);
-            break;
-          }
+          // Only a turn that actually ran (went busy) earns a ✅.
+          if (!busySessions.delete(sessionID)) break;
           // Focus-aware: skip if the user is already in our tab (they can see it's done).
           const active = await activeTabId();
           if (myTabId != null && active === myTabId) break;

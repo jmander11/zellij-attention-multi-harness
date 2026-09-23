@@ -20,6 +20,15 @@ https://github.com/user-attachments/assets/646effc0-1c24-413d-bef3-3d85591cd89b
 - **Standalone plugin** — works independently, no zjstatus or other status bar plugins needed
 - **zj-radar integration** — accepts `zj_radar.status.v1` broadcasts from Claude Code, Cursor, Copilot, and opencode
 
+## Documentation
+
+- **Local setup** (opencode in a zellij pane on the same host as the zellij server): the
+  [Installation](#installation) steps below.
+- **Remote setup** (opencode on another machine over `ssh`, zellij server local):
+  [SSH-SETUP.md](SSH-SETUP.md) — socket forwarding, `ZELLIJ_PANE_ID`/`ZELLIJ_SOCKET_DIR`,
+  and the `zssh`/`zssh2` shell functions.
+- **Troubleshooting**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
 ## Prerequisites
 
 - **Zellij** ≥ 0.44.3
@@ -143,7 +152,7 @@ What it does (verified end-to-end):
 
 | opencode event | Tab icon |
 |---|---|
-| `session.idle` — turn finished (initial idle on startup is suppressed, suppressed on the active tab) | ✅ |
+| `session.idle` — turn finished (only after a real turn ran; suppressed on the active tab) | ✅ |
 | `session.error` | ⏳ |
 | `question.asked` — a `question`-tool prompt is waiting for an answer | ⏳ |
 | `question.replied` | clears ⏳ |
@@ -154,8 +163,11 @@ Notes:
 
 - No-op outside zellij (requires `ZELLIJ_PANE_ID`, which zellij sets automatically in pane environments)
 - Subagent (e.g. explore) sessions are filtered out, so icons reflect the main session only
+- ✅ is only shown for a turn that actually ran (a `busy`→`idle` transition); a resumed session's first turn is not swallowed
+- The `zellij` CLI is resolved from `~/.local/bin/zellij` or `/usr/local/bin/zellij` before falling back to `PATH`, so it works even when the remote shell's `PATH` omits it
 - Activity log: `/tmp/opencode-zellij-attention.log`
 - Takes effect on the next opencode start (plugins are not hot-reloaded)
+- **Running opencode on a remote host over `ssh`?** See [SSH-SETUP.md](SSH-SETUP.md) — it covers forwarding the local zellij socket to the remote and wiring up `ZELLIJ_PANE_ID` / `ZELLIJ_SOCKET_DIR`.
 
 ### Step 5: Restart Zellij and Test
 
