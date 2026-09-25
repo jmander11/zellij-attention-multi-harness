@@ -173,8 +173,8 @@ What it does (verified end-to-end):
 
 | opencode event | Tab icon |
 |---|---|
-| `session.idle` — turn finished (only after a real turn ran; suppressed on the active tab) | ✅ |
-| `session.error` | ⏳ |
+| `session.idle` — turn finished (only after a real turn ran; suppressed on the active tab). Shows ✅ even if the turn hit a transient error along the way | ✅ |
+| `session.error` — a real error needs attention. Overwritten by ✅ if the turn recovers and completes; stays if the turn fails (never goes idle) | ⏳ |
 | `question.asked` — a `question`-tool prompt is waiting for an answer | ⏳ |
 | `question.replied` | clears ⏳ |
 | `permission.asked` / `permission.updated` — still unanswered after a 300 ms debounce | ⏳ |
@@ -185,6 +185,7 @@ Notes:
 - No-op outside zellij (requires `ZELLIJ_PANE_ID`, which zellij sets automatically in pane environments)
 - Subagent (e.g. explore) sessions are filtered out, so icons reflect the main session only
 - ✅ is only shown for a turn that actually ran (a `busy`→`idle` transition); a resumed session's first turn is not swallowed
+- A **completed** turn shows ✅ even if it hit a transient error (opencode fires `session.error` for retried rate-limits/timeouts too). Only a turn that genuinely **failed** (never goes idle) keeps the ⏳
 - The `zellij` CLI is resolved from `~/.local/bin/zellij` or `/usr/local/bin/zellij` before falling back to `PATH`, so it works even when the remote shell's `PATH` omits it
 - Activity log: `/tmp/opencode-zellij-attention.log`
 - Takes effect on the next opencode start (plugins are not hot-reloaded)

@@ -281,8 +281,6 @@ export const ZellijAttention = async ({ client } = {}) => {
   await startupCleanup();
 
   const permissionTimers = new Map();
-  // Sessions whose last turn ended in an error; their next idle shows ⏳, not ✅.
-  const erroredSessions = new Set();
   // Sessions that went busy (started a turn) since load. opencode emits session.idle
   // only on real turn completion (the runner is created lazily on first prompt), so a
   // resumed session emits NO idle at load — its first turn completion must not be
@@ -310,9 +308,12 @@ export const ZellijAttention = async ({ client } = {}) => {
           // Focus-aware: skip if the user is already in our tab (they can see it's done).
           const active = await activeTabId();
           if (myTabId != null && active === myTabId) break;
-          // A turn that ended in error should show ⏳, not ✅.
-          const wasError = erroredSessions.delete(sessionID);
-          await setIcon(wasError ? ICON_WAIT : ICON_DONE, wasError ? "error" : "idle");
+          // A COMPLETED turn shows ✅, even if it hit a transient error along the way.
+          // opencode fires session.error for retried/transient failures (rate limits,
+          // timeouts it retries) too, so keying ✅ off "no error ever fired" mislabels
+          // successful turns as ⏳. A turn that genuinely FAILED never goes idle, so its
+          // session.error ⏳ simply stays until the next turn or focus.
+          await setIcon(ICON_DONE, "idle");
           break;
         }
         // ⏳ (action needed) is set regardless of focus so it is visible even when you are
@@ -321,7 +322,10 @@ export const ZellijAttention = async ({ client } = {}) => {
         case "session.error": {
           const sessionID = event.properties?.sessionID;
           if (await isSubSession(sessionID)) break;
-          if (sessionID != null) erroredSessions.add(sessionID);
+          // ⏳ now: a real error needs attention. If the turn recovers and completes, the
+          // session.idle ✅ overwrites it; if it fails (no idle), the ⏳ stays. Log the
+          // error name so transient-vs-fatal is diagnosable.
+          log(`session.error ${sessionID ?? "?"} name=${event.properties?.error?.name ?? "?"}`);
           await setIcon(ICON_WAIT, "error");
           break;
         }
