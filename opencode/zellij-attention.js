@@ -206,9 +206,20 @@ export const ZellijAttention = async ({ client } = {}) => {
     return null;
   }
 
-  async function renameTab(name) {
-    if (myTabId == null) return;
-    await runZellij(["rename-tab-by-id", String(myTabId), name]);
+  // Rename our tab to `base + (icon ? " " + icon : "")`. Returns true if the tab now
+  // matches (or already did), false if we couldn't apply it (transient CLI failure).
+  // Callers MUST treat a false return as "retry later" — never assume the rename took,
+  // or a failed rename wedges the icon (myIcon cleared but the tab still shows it).
+  async function applyIcon(icon) {
+    if ((await ensureTabId()) == null) return false;
+    const name = await myTabName();
+    if (name == null) return false;
+    const base = stripIcon(name);
+    const target = icon ? `${base} ${icon}` : base;
+    if (target === name) return true;
+    const out = await runZellij(["rename-tab-by-id", String(myTabId), target]);
+    if (out != null) log(`applyIcon tab=${myTabId} '${name}' -> '${target}'`);
+    return out != null;
   }
 
   function stopPoll() {
@@ -218,7 +229,9 @@ export const ZellijAttention = async ({ client } = {}) => {
     }
   }
 
-  // While an icon is set, poll the active tab; when the user is on our tab, strip the icon.
+  // While an icon is set, poll the active tab; when the user is on our tab, strip the icon
+  // (clear-on-focus). If a rename fails (transient CLI timeout), the poll keeps running and
+  // retries — this is what prevents a failed rename from wedging the icon on the tab.
   function startPoll() {
     stopPoll();
     const tick = async () => {
@@ -229,52 +242,39 @@ export const ZellijAttention = async ({ client } = {}) => {
       const active = await activeTabId();
       if (active != null && active === myTabId) {
         await clearIcon("focus");
-        return; // clearIcon() stops the poll
+        // clearIcon() only stops the poll if the rename succeeded; if it failed, myIcon is
+        // still set, so reschedule and retry.
+        if (myIcon != null) pollTimer = setTimeout(tick, POLL_INTERVAL_MS);
+        return;
       }
+      // Not on our tab: re-apply the icon in case a prior set-rename failed.
+      await applyIcon(myIcon);
       pollTimer = setTimeout(tick, POLL_INTERVAL_MS);
     };
     pollTimer = setTimeout(tick, POLL_INTERVAL_MS);
   }
 
   async function setIcon(icon, source) {
-    if ((await ensureTabId()) == null) return;
-    const name = await myTabName();
-    if (name == null) return;
-    const base = stripIcon(name);
-    const target = `${base} ${icon}`;
     myIcon = icon;
     iconSource = source;
-    if (target !== name) await renameTab(target);
-    log(`setIcon ${icon} tab=${myTabId} '${name}' -> '${target}'`);
+    await applyIcon(icon); // best-effort now; the poll re-applies it if this failed
     startPoll();
   }
 
   async function clearIcon(reason) {
-    const had = myIcon;
+    if (myIcon == null) return;
+    const ok = await applyIcon(null);
+    if (!ok) return; // rename failed: keep myIcon + the poll running so it retries
     myIcon = null;
     iconSource = null;
     stopPoll();
-    if (had == null || (await ensureTabId()) == null) return;
-    const name = await myTabName();
-    if (name == null) return;
-    const base = stripIcon(name);
-    if (base !== name) {
-      await renameTab(base);
-      log(`clearIcon(${reason}) tab=${myTabId} '${name}' -> '${base}'`);
-    }
+    log(`clearIcon(${reason}) tab=${myTabId} done`);
   }
 
   // Strip any icon left on our tab from a previous run / the old WASM mechanism.
-  // (clearIcon() is a no-op here because myIcon is null, so do it explicitly.)
+  // Best-effort: if it can't be cleared now, the first setIcon's poll will reconcile it.
   async function startupCleanup() {
-    if ((await ensureTabId()) == null) return;
-    const name = await myTabName();
-    if (name == null) return;
-    const base = stripIcon(name);
-    if (base !== name) {
-      await renameTab(base);
-      log(`startup-cleanup tab=${myTabId} '${name}' -> '${base}'`);
-    }
+    await applyIcon(null);
   }
   // Await (not fire-and-forget) so a just-set icon from an early event can't be
   // stripped by the cleanup; the handler is only registered once cleanup is done.
