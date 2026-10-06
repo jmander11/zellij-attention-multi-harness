@@ -100,12 +100,18 @@ path fails).
 # Fill these in for your environment:
 export ZSSH_HOST="orw-sdedev-01.wv.mentorg.com"          # your remote host
 export ZSSH_LOCAL_SOCK="/run/user/57296/zellij/contract_version_1/main"  # from step 2
+# Optional: if the remote opencode uses a NON-default db (via OPENCODE_DB), set this
+# so zssh forwards it. Leave unset if the remote uses the default db location.
+export ZSSH_OPENCODE_DB="/export/mjared/opencode.db"
 
 _zssh() {
   local tag=$1
   local rdir="/tmp/zellij-sock${tag}"
   local host="${ZSSH_HOST:?set ZSSH_HOST}"
   local localsock="${ZSSH_LOCAL_SOCK:?set ZSSH_LOCAL_SOCK}"
+  # Forward OPENCODE_DB only if the user configured a remote db path.
+  local odbexport=""
+  [ -n "${ZSSH_OPENCODE_DB:-}" ] && odbexport=" OPENCODE_DB=$ZSSH_OPENCODE_DB"
   # OpenSSH leaves the -R socket file behind on disconnect, so clear it first
   # (and create the dir in case the remote /tmp was wiped by a reboot).
   ssh -o BatchMode=yes "$host" \
@@ -114,11 +120,18 @@ _zssh() {
   # remote zsh would show no prompt). $ZELLIJ_PANE_ID expands LOCALLY.
   ssh -t -R "$rdir/contract_version_1/main:$localsock" \
     "$host" \
-    "export ZELLIJ_PANE_ID=$ZELLIJ_PANE_ID ZELLIJ_SOCKET_DIR=$rdir; exec zsh"
+    "export ZELLIJ_PANE_ID=$ZELLIJ_PANE_ID ZELLIJ_SOCKET_DIR=$rdir$odbexport; exec zsh"
 }
 zssh()  { _zssh ""; }
 zssh2() { _zssh "_2"; }
 ```
+
+> **`OPENCODE_DB` (if your remote opencode uses a non-default db).** opencode stores
+> sessions in a sqlite db, defaulting to `~/.local/share/opencode/opencode.db`. If the
+> remote machine runs opencode against a *different* db (e.g. a machine-local one on a
+> fast disk, set via `OPENCODE_DB`), a plain `zssh` opencode would open the wrong/stale
+> db. Set `ZSSH_OPENCODE_DB` to that path and `zssh` forwards it. Check what the remote
+> actually uses with `tr '\0' '\n' < /proc/$(pgrep -x opencode | head -1)/environ | grep OPENCODE_DB`.
 
 Then, in a zellij tab:
 
