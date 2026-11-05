@@ -25,6 +25,8 @@ https://github.com/user-attachments/assets/646effc0-1c24-413d-bef3-3d85591cd89b
 - **Local setup** (opencode in a zellij pane on the same host as the zellij server):
   the [Quick start](#quick-start-opencode-same-host) below — two steps, no WASM plugin,
   no zj-radar, no ssh.
+- **pi** (Earendil's coding agent): the [pi](#pi) section — a bundled extension that shows
+  ✅/⏳ on pi's own tab, same producer-side mechanism as the opencode plugin.
 - **Remote setup** (opencode on another machine over `ssh`, zellij server local):
   [SSH-SETUP.md](SSH-SETUP.md) — socket forwarding, `ZELLIJ_PANE_ID`/`ZELLIJ_SOCKET_DIR`,
   and the `zssh`/`zssh2` shell functions.
@@ -190,6 +192,38 @@ Notes:
 - Activity log: `/tmp/opencode-zellij-attention.log`
 - Takes effect on the next opencode start (plugins are not hot-reloaded)
 - **Running opencode on a remote host over `ssh`?** See [SSH-SETUP.md](SSH-SETUP.md) — it covers forwarding the local zellij socket to the remote and wiring up `ZELLIJ_PANE_ID` / `ZELLIJ_SOCKET_DIR`.
+
+#### pi
+
+[pi](https://pi.dev) (Earendil's `@earendil-works/pi-coding-agent`) loads TypeScript/JS **extensions**, so no zj-radar CLI **and no WASM plugin** are needed — the extension renames its own Zellij tab by id and clears on focus, exactly like the opencode plugin. Drop the bundled extension into pi's user (or project) extensions directory — it is loaded automatically at pi startup:
+
+```bash
+mkdir -p ~/.pi/agent/extensions
+cp pi/zellij-attention.js ~/.pi/agent/extensions/
+# or: curl -L https://raw.githubusercontent.com/jmander11/zellij-attention-multi-harness/main/pi/zellij-attention.js \
+#     -o ~/.pi/agent/extensions/zellij-attention.js
+```
+
+| pi event | Tab icon |
+|---|---|
+| `agent_settled` — a run finished and Pi is idle (not aborted, last turn not an error; only after a run started; suppressed on the active tab) | ✅ |
+| `turn_end` with `outcome: "error"` — a turn failed. Overwritten by ✅ if a later turn recovers and the run settles; stays if the run ends errored | ⏳ |
+| `ui_prompt_start` — a blocking UI prompt (an extension's confirm/input) is open, after a 300 ms debounce | ⏳ |
+| `ui_prompt_end` | clears the prompt ⏳ (only if the icon came from a prompt) |
+| `session_compact_failed` — a compaction failed and won't be retried (context stuck) | ⏳ |
+| `agent_settled` with `aborted: true` — the user aborted (e.g. Escape) | clears the icon |
+
+Notes:
+
+- No-op outside zellij (requires `ZELLIJ_PANE_ID`, which zellij sets automatically in pane environments / `zssh` forwards)
+- ✅ is only shown for a run that actually started (`agent_start`→`agent_settled`); a settle with no run is ignored
+- A **completed** run shows ✅ even if an earlier turn hit a transient error (a later successful settle overwrites the ⏳). Only a run that ends errored keeps the ⏳
+- The ⏳-on-prompt only appears if your pi loads a UI-prompt-based extension (e.g. a permission gate); pi has **no built-in** permission prompt
+- The `zellij` CLI is resolved from `~/.local/bin/zellij` or `/usr/local/bin/zellij` before falling back to `PATH`, and resolves the session socket from `ZELLIJ_SOCKET_DIR` (set by `zssh`), so no `--socket` flag is needed
+- Activity log: `/tmp/pi-zellij-attention.log`
+- Takes effect on the next pi start (extensions are not hot-reloaded)
+- **Running pi on a remote host over `ssh`?** `pi` lives in the shared home (`~/.local/bin/pi` → `~/.pi/agent/...`), so it's already present on the remote — no separate install. `zssh` exports `ZELLIJ_PANE_ID`/`ZELLIJ_SOCKET_DIR` and prepends `~/.local/bin` to the remote PATH, so both `pi` and the icons work with no extra setup (see [SSH-SETUP.md](SSH-SETUP.md)).
+- **Two pi in one tab** (a split pane, or a local pi + a `zssh`-remote pi): both would otherwise race on the same tab name (one strips the icon while the other re-applies it, wedging it). The extension coordinates via a shared per-(session,tab) file `~/.zellij-attention/<session>/<tabId>.panes` (on shared NFS, so a local and a remote pi in the same tab agree); each line is `<paneId>\t<icon>\t<lastSeen>`. The **lowest fresh pane id** is the leader and the only instance that renames the tab; it renders the **worst** fresh icon across all instances (⏳ > ✅ > none), so a non-leader's attention still shows. A line is fresh for ~3 poll ticks; older lines (a killed/exited instance) are auto-pruned, so a dropped `ssh` (which kills the remote pi, not a clean shutdown) no longer wedges the tab. Writes are atomic (temp file + rename). The file is released on a clean `session_shutdown`. **Requirement:** both instances must derive the *same* session key — a local pi gets `ZELLIJ_SESSION_NAME` from zellij, but a `zssh`-remote pi only has it if `zssh` forwards it (the `zssh` in [SSH-SETUP.md](SSH-SETUP.md) exports `ZELLIJ_SESSION_NAME` = the local socket's basename). If a remote pi lacks it, it falls back to `basename(ZELLIJ_SOCKET_DIR)` and would use a *different* file than the local pi → the race returns.
 
 ### Step 5: Restart Zellij and Test
 

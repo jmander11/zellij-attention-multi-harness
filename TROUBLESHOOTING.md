@@ -72,3 +72,29 @@ tab-bar/status-bar plugins, and was not restarted automatically).
 - This is expected if notifications are still active on other panes in the same tab
 - Focus the pane with the notification to clear it — the tab name restores automatically
 - To force-clear all notifications, restart the Zellij session (state is memory-only)
+
+## Remote pi not rendering icons (zssh / zssh2)
+
+Symptom: the tab's remote pi is alive (its line in `~/.zellij-attention/<session>/<tab>.panes`
+keeps updating, and the remote `/tmp/pi-zellij-attention.log` shows state changes like
+`clearDoneIcon tab=N`) but ✅/⏳ never appear on the tab — the log has state changes but
+no `renderIcon tab=N` lines. Cause: the pane's reverse-tunnel socket is missing on the
+remote (the ssh died — pane closed, network blip, remote reboot — and nothing re-created it),
+so the remote pi's `zellij action` calls fail with "There is no active session!".
+
+1. **Check the pane's tunnel socket** (`<pane>` is the pane's `ZELLIJ_PANE_ID`):
+   ```bash
+   ssh <remote> "ls /tmp/zellij-sock*_p<pane>/contract_version_1/ 2>/dev/null"
+   ```
+   An empty or missing dir = dead tunnel. (Per-pane dirs: each zssh pane owns
+   `/tmp/zellij-sock<tag>_<session>_p<pane>` — see SSH-SETUP.md.)
+2. **Connections made outside zellij** (no `ZELLIJ_PANE_ID`) use the shared
+   `/tmp/zellij-sock<tag>_<session>` dir instead — check that one:
+   ```bash
+   ssh <remote> "ls -d /tmp/zellij-sock*/contract_version_1/ 2>/dev/null | grep -v _p"
+   ```
+3. **Fix: re-run `zssh`/`zssh2` in that pane.** The pre-step clears the stale socket and
+   the new `-R` forward re-creates it. The pi's down-backoff recovers automatically once
+   the socket exists again (its log shows `zellij server back up (was down Ns)`).
+4. Verify from the remote shell: `ZELLIJ_SOCKET_DIR=<dir> ~/.local/bin/zellij action list-tabs`
+   must list your LOCAL tabs.

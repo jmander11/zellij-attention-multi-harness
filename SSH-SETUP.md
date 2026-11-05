@@ -29,7 +29,7 @@ If any of these is missing, the plugin silently no-ops (it now logs a line to
 ```
  local machine (zellij server)                 remote machine (opencode)
  ┌──────────────────────────────┐   ssh -R    ┌──────────────────────────────┐
- │ /run/user/<uid>/zellij/      │ ──────────▶ │ /tmp/zellij-sock/.../main    │
+ │ /run/user/<uid>/zellij/      │ ──────────▶ │ /tmp/zellij-sock_<s>_p<p>/main│
  │   contract_version_1/<sess>  │  (unix sock │  (forwarded socket)         │
  │                              │   forward)  │        │                     │
  │  zellij server (session)     │             │        ▼                     │
@@ -89,10 +89,11 @@ args). In the work setup it was `/run/user/57296/zellij/contract_version_1/main`
 
 ## The shell functions
 
-Add to your **local** shell rc (`~/.zshrc` / `~/.bashrc`). Two variants are provided so
-you can have **two** remote tabs at once (each needs its own remote socket path, because
-OpenSSH leaves the `-R` socket file behind on disconnect and a second bind to the same
-path fails).
+Add to your **local** shell rc (`~/.zshrc` / `~/.bashrc`). Each zssh pane gets its own
+remote socket path (keyed by pane id + session — see the function), so you can have as
+many remote tabs as you like: re-running `zssh` in one pane can no longer break another
+pane's tunnel. The `zssh`/`zssh2` tags mostly namespace the fallback path used when
+`ZELLIJ_PANE_ID` is unset (zssh outside zellij).
 
 ```zsh
 # zssh / zssh2: ssh to a remote with zellij-attention wired up.
@@ -106,12 +107,26 @@ export ZSSH_OPENCODE_DB="/export/mjared/opencode.db"
 
 _zssh() {
   local tag=$1
-  local rdir="/tmp/zellij-sock${tag}"
   local host="${ZSSH_HOST:?set ZSSH_HOST}"
   local localsock="${ZSSH_LOCAL_SOCK:?set ZSSH_LOCAL_SOCK}"
   # Forward OPENCODE_DB only if the user configured a remote db path.
   local odbexport=""
   [ -n "${ZSSH_OPENCODE_DB:-}" ] && odbexport=" OPENCODE_DB=$ZSSH_OPENCODE_DB"
+  # The session name is the basename of the local socket (e.g. "main"). Forward it so a
+  # local pi and a zssh-remote pi in the same tab use the SAME per-(session,tab) state
+  # file (the pi extension keys its leader-election file by session name). Without this,
+  # the remote pi (which has no ZELLIJ_SESSION_NAME) would derive a different key and the
+  # two instances would race on the tab name.
+  local sessname="$(basename "$localsock")"
+  # sessname is interpolated into the remote command below; strip glob metachars so a
+  # user-set ZSSH_LOCAL_SOCK can't inject a remote glob (e.g. a `*` in the basename).
+  sessname=${sessname//[!A-Za-z0-9_-]/}
+  # Per-pane remote socket dir: /tmp/zellij-sock<tag>_<session>_p<pane>. Keying on the
+  # pane id (and session) means each zssh pane owns its own -R tunnel: re-running zssh in
+  # one pane can no longer yank the shared socket out from under every other pane's
+  # remote agent (a shared dir breaks the other tabs' icons this way). No ZELLIJ_PANE_ID
+  # (zssh outside zellij) falls back to the session-scoped shared dir.
+  local rdir="/tmp/zellij-sock${tag}_${sessname}${ZELLIJ_PANE_ID:+_p$ZELLIJ_PANE_ID}"
   # OpenSSH leaves the -R socket file behind on disconnect, so clear it first
   # (and create the dir in case the remote /tmp was wiped by a reboot).
   ssh -o BatchMode=yes "$host" \
@@ -120,7 +135,7 @@ _zssh() {
   # remote zsh would show no prompt). $ZELLIJ_PANE_ID expands LOCALLY.
   ssh -t -R "$rdir/contract_version_1/main:$localsock" \
     "$host" \
-    "export ZELLIJ_PANE_ID=$ZELLIJ_PANE_ID ZELLIJ_SOCKET_DIR=$rdir$odbexport; exec zsh"
+    "export ZELLIJ_PANE_ID=$ZELLIJ_PANE_ID ZELLIJ_SOCKET_DIR=$rdir ZELLIJ_SESSION_NAME=$sessname$odbexport; exec zsh"
 }
 zssh()  { _zssh ""; }
 zssh2() { _zssh "_2"; }
@@ -145,9 +160,12 @@ Then, in a zellij tab:
 - **Use `/tmp` on the remote, not the NFS home.** OpenSSH does **not** unlink the `-R`
   unix socket on disconnect. On a local fs the stale file is harmless (the pre-step
   `rm -f` clears it); on NFS the stale file breaks the next bind, so reconnections fail.
-- **One connection per socket path.** Don't open two `zssh` connections (same path) at
-  once — the second's pre-step `rm -f` yanks the socket out from under the first. Use
-  `zssh2` (a different path) for the second tab.
+- **Per-pane tunnels (zsh + zellij).** Each pane's tunnel lives in
+  `/tmp/zellij-sock<tag>_<session>_p<pane>`, so re-running `zssh` in one pane only
+  touches that pane's socket — other panes' tunnels (and their remote agents' icon
+  updates) are unaffected. The one remaining shared path is the no-`ZELLIJ_PANE_ID`
+  fallback (`/tmp/zellij-sock<tag>_<session>`): don't open two such connections at once
+  — the second's pre-step `rm -f` yanks the socket out from under the first.
 - **`-t` is required.** Without it the remote `zsh` starts non-interactive (no prompt) and
   looks hung.
 - **Restart opencode to pick up plugin changes.** Plugins load at startup, not hot.
@@ -166,6 +184,35 @@ echo "$ZELLIJ_PANE_ID $ZELLIJ_SOCKET_DIR"     # both must be non-empty
 
 Then run a turn in opencode and watch the local tab bar: ✅ appears when the turn
 finishes (suppressed while you're sitting in that tab), ⏳ when it needs input or errors.
+
+## Using pi instead of opencode
+
+The same `zssh` setup works for [pi](https://pi.dev) (Earendil's coding agent) — `zssh`
+exports `ZELLIJ_PANE_ID` + `ZELLIJ_SOCKET_DIR` (which the pi extension
+(`pi/zellij-attention.js`) uses to rename its own tab) **and** prepends `~/.local/bin` to the
+remote PATH, so bare `pi` resolves. Notes:
+
+- `pi` must be reachable **on the remote**. If it's in the shared home (`~/.local/bin/pi` →
+  `~/.pi/agent/...`, as here), it's already present — no separate install. Otherwise install it
+  on the remote: `curl -fsSL https://pi.dev/install.sh | sh` (needs Node 22.19+; the installer
+  handles it). The pi-bundled Node lives in the shared home too (`~/.local/share/pi-node/`).
+- Install the extension into pi's user dir (shared NFS home → both machines):
+  `mkdir -p ~/.pi/agent/extensions && cp pi/zellij-attention.js ~/.pi/agent/extensions/`.
+- **Two pi in one tab** (a local pi + a `zssh`-remote pi, or a split pane): the extension
+  coordinates via a shared per-(session,tab) file `~/.zellij-attention/<session>/<tabId>.panes`
+  (on shared NFS, so both machines agree). The **lowest fresh pane id** is the leader and the
+  only instance that renames the tab; it renders the **worst** fresh icon across all instances
+  (⏳ > ✅ > none), so a non-leader's attention still shows. A line is fresh for ~3 poll ticks;
+  older lines (a killed/exited instance) are auto-pruned, so a dropped `ssh` (which kills the
+  remote pi, not a clean shutdown) no longer wedges the tab. Without this, the two instances
+  race on the tab name and wedge the icon. **Requirement:** both instances must derive the
+  *same* session key. A local pi gets `ZELLIJ_SESSION_NAME` from zellij, but a `zssh`-remote pi
+  only has it if `zssh` forwards it — the `zssh` above exports `ZELLIJ_SESSION_NAME` (the local
+  socket's basename). If a remote pi lacks it, it falls back to `basename(ZELLIJ_SOCKET_DIR)`
+  and would use a *different* file than the local pi → the race returns.
+
+Then run `pi` in the `zssh` tab instead of `opencode`. Watch `/tmp/pi-zellij-attention.log`
+on the remote. See the [pi](README.md#pi) section for the event→icon table.
 
 ## Troubleshooting
 
