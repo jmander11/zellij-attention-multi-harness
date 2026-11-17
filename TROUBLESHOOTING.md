@@ -154,3 +154,25 @@ attention indicator are merged into ONE shared plugin (`zellij:bars`). If that p
    in `~/.config/zellij/config.kdl` stops the counts feed entirely (the bars' `Subscribe` returns
    early, so the indicator never renders). The config watcher applies it live, but a *running*
    plugin keeps its cached state — run step 2 afterwards for it to take effect.
+
+## A floating pane you opened is not visible
+
+A pane can exist and be perfectly healthy yet never draw, because *tab-level* floating visibility
+is separate from pane existence. `list-panes` shows it (`FLOATING true`); the tab simply hides it.
+
+```bash
+zellij action are-floating-panes-visible --tab-id <ID>   # exit 0 = visible, 1 = hidden
+zellij action show-floating-panes --tab-id <ID>          # reveal it
+zellij action hide-floating-panes --tab-id <ID>          # hide it again
+```
+
+Note the flag is `--tab-id`, not `--tab-index`. The state is persisted per tab as
+`hide_floating_panes=true` in `~/.cache/zellij/<contract>/session_info/<session>/session-layout.kdl`,
+so it survives restarts and is easy to leave set by accident.
+
+**Do not use `dump-screen` to check whether a plugin pane renders.** It returns nothing for plugin
+panes (even the tab-bar/status-bar), so an empty dump says nothing. Only terminal panes dump.
+
+**On >= 0.46.0 with `session_indicator false`:** the indicator in the tab bar was the click target
+that opened the Session Manager overlay. With it disabled, use `Alt f` (`ToggleFloatingPanes`),
+pane-mode `w`, or the session-mode session-manager launcher instead.
