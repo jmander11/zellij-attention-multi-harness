@@ -98,3 +98,59 @@ so the remote pi's `zellij action` calls fail with "There is no active session!"
    the socket exists again (its log shows `zellij server back up (was down Ns)`).
 4. Verify from the remote shell: `ZELLIJ_SOCKET_DIR=<dir> ~/.local/bin/zellij action list-tabs`
    must list your LOCAL tabs.
+
+## Bars show "ERROR IN PLUGIN - check logs for more info"
+
+Applies to Zellij >= 0.46.0, where `tab-bar`, `status-bar`, `compact-bar`, `link` and the
+attention indicator are merged into ONE shared plugin (`zellij:bars`). If that plugin traps,
+*both* bars go blank at once — this is not the pi extension.
+
+1. **Confirm it is the bars plugin, not pi:**
+
+   ```bash
+   LOG=$(ls -t /tmp/zellij-*/zellij-log/zellij.log | head -1)
+   grep -c "failed to call shared_update" "$LOG"
+   grep -A1 "failed to call shared_update" "$LOG" | grep -v "failed to call" | sort -u
+   ```
+
+   Upstream bug zellij#5374: the wasm instance traps with `out of bounds memory access` and is
+   *not* torn down, so the server keeps dispatching into it — expect thousands of lines, ~15/sec:
+
+   ```
+   ERROR |zellij_server::plugins::s| ... shared.rs:398: failed to call shared_update on shared plugin
+   Caused by:
+       out of bounds memory access
+   ```
+
+   Panes are unaffected; only the bars die. The flood also burns CPU and fills `/tmp`.
+
+2. **Fix without restarting (panes untouched):**
+
+   ```bash
+   zellij action start-or-reload-plugin zellij:bars
+   ```
+
+   This tears down the trapped instance and rebuilds it, re-binding the existing bar slots.
+   Verify the flood stopped:
+
+   ```bash
+   s=$(stat -c %s "$LOG"); sleep 10; echo $(( $(stat -c %s "$LOG") - s ))  # want 0
+   ```
+
+   **Caveat:** if the command prints a `plugin_<N>` id instead of nothing, the shared instance
+   was not matched and Zellij *added a new pane* instead of reloading. That pane is unselectable
+   (bars panes are `set_selectable(false)`), so it looks like a ghost you cannot switch to.
+   Remove it:
+
+   ```bash
+   zellij action list-panes -a | grep 'zellij:bars'   # expect only 1-row tab-bar/status-bar
+   zellij action close-pane -p plugin_<N>
+   ```
+
+3. **`reload-config` does not help.** There is no such subcommand in 0.46.0, and a config reload
+   only propagates options — it never re-instantiates a plugin. The plugin reload above is the lever.
+
+4. **Reduce recurrence.** The attention indicator is the usual trigger. `session_indicator false`
+   in `~/.config/zellij/config.kdl` stops the counts feed entirely (the bars' `Subscribe` returns
+   early, so the indicator never renders). The config watcher applies it live, but a *running*
+   plugin keeps its cached state — run step 2 afterwards for it to take effect.
